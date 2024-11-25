@@ -1,3 +1,5 @@
+# NOTE: for some reason, SFE can not load the MEFISH data correctly, as it only load in 2k cells.
+# Deprecated code for now. 
 # Load data ----
 suppressPackageStartupMessages({
   library(SpatialFeatureExperiment)
