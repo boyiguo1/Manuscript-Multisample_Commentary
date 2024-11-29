@@ -2,10 +2,11 @@
 suppressPackageStartupMessages({
   library(SpatialExperiment)
   library(escheR)
-  # library(SpatialFeatureExperiment)
   library(here)
-  library(sessioninfo)
   library(scuttle)
+  library(scran)
+  library(tidyverse)
+  library(sessioninfo)
 })
 
 # Load Data ----
@@ -21,159 +22,146 @@ spe_visium <- read10xVisium(
   load = FALSE
 )
 
-spe_visium
-# 2264 spots and 19465 genes
+rowData(spe_visium)$ensmbl <- rownames(spe_visium)
 
 ### Create log counts assay ----
-
 spe_visium <- logNormCounts(spe_visium)
 
 ## Merfish data ----
-# sfe_mer <- readVizgen(here("raw_data/merfish_slice2_rep3"),
-# min_area = 0,  z = "all")
-
-
-### Subset to overlapping regions only ----
 # NOTE: we used the results from Clifton et al. (2023)
 merf_csv <- readr::read_csv(here("raw_data/STalign_S2R3_to_Visium.csv"))
-
 colnames(merf_csv)[1] <- "key"
-
-
 count_assay <- merf_csv[, 7:ncol(merf_csv)] |> t() # Gene-by-cell
-
 cd <- merf_csv[, 1:6]
 
-spe_merf <- SpatialExperiment(
+# Create SPE object based on data
+raw_merf <- SpatialExperiment(
   assay = list("counts" = count_assay),
+  sample_id = "merfish",
   colData = cd,
   spatialCoordsNames = c("STalign_x", "STalign_y")
 )
-spe_merf$sample_id <- "merfish"
 
+rowData(raw_merf)$symbol <- rownames(raw_merf)
+# Create mouse ensembl id in row data
+ensmbl_vec <- rowData(spe_visium)$ensmbl[match(rowData(raw_merf)$symbol, rowData(spe_visium)$symbol)]
+rowData(raw_merf)$ensmbl <- ensmbl_vec
+# Non-matching ensmbl use gene symbol
+rowData(raw_merf)$ensmbl[which(is.na(ensmbl_vec))] <- rowData(raw_merf)$symbol[which(is.na(ensmbl_vec))]
+
+# Use ensmbl id as row name
+rownames(raw_merf) <- rowData(raw_merf)$ensmbl
+
+# Conformable format
+stopifnot(colnames(rowData(raw_merf)) == colnames(rowData(spe_visium)))
+
+### Subset to Merfish/Visium overlapping hemisphere ----
 # Confirm the Pmatch column is the WM value in the turorial
 # https://jef.works/STalign/notebooks/merfish-visium-alignment-with-point-annotator.html
-hist(spe_merf$Pmatch)
-
-make_escheR(spe_merf) |>
-  add_fill("sample_id", point_size = 0.2)
-
-make_escheR(
-  data.frame(sample_id = "merfish"),
-  .x = merf_csv$center_x, .y = merf_csv$center_y
-) |>
-  add_fill("sample_id", point_size = 0.2)
-
+hist(raw_merf$Pmatch)
 
 WMthresh <- 0.95
-sub_merf <- spe_merf[, spe_merf$Pmatch > WMthresh]
-
-make_escheR(
-  data.frame(sample_id = "merfish"),
-  .x = sub_merf$center_x, .y = sub_merf$center_y
-) |>
-  add_fill("sample_id", point_size = 0.2)
-
-sub_merf
-# 40k~ cells
-
+spe_merf <- raw_merf[, raw_merf$Pmatch > WMthresh]
 
 ### Log counts normalizaiton ----
-sub_merf <- logNormCounts(sub_merf)
+spe_merf <- logNormCounts(spe_merf)
+
+spe_merf
+# 40k~ cells
+
+## Find overlapping genes ----
+overlap_gene_ensmbl <- intersect(rownames(spe_visium), rownames(spe_merf))
+# Error prevention
+stopifnot(overlap_gene_ensmbl > 400)
+
+## Visium with overlapping genes ----
+spe_overlap_visium <- spe_visium[overlap_gene_ensmbl, ]
+spe_overlap_visium <- logNormCounts(spe_overlap_visium, size.factors = NULL)
+
+## Merfish with overlapping genes ----
+spe_overlap_merf <- spe_merf[overlap_gene_ensmbl, ]
+spe_overlap_merf <- logNormCounts(spe_overlap_merf, size.factors = NULL)
 
 
-# Save RDS ----
+# Clustering and PCA (if needed) ----
 
+## Visium (transcriptome wide) ----
+set.seed(20241127)
+visium_HVG_2000 <- getTopHVGs(spe_visium, n = 2000)
+spe_visium <- fixedPCA(spe_visium, subset.row = visium_HVG_2000)
+cluster_HVG_label <- clusterCells(spe_visium, use.dimred = "PCA")
 
+## Visium (400 gene) ----
+set.seed(20241127)
+spe_overlap_visium <- fixedPCA(spe_overlap_visium, subset.row = NULL)
+cluster_400_label <- clusterCells(spe_overlap_visium, use.dimred = "PCA")
 
+## Merfish (400 gene) ----
+set.seed(20241127)
+spe_overlap_merf <- fixedPCA(spe_overlap_merf, subset.row = NULL)
+merf_label <- clusterCells(spe_overlap_merf, use.dimred = "PCA")
 
-# Analysis ----
-## Overlapping genes ----
-intersect(rowData(spe_visium)$symbol, rownames(sub_merf))
+## Organize cluster labels ----
 
-# TODO
-# 1) do we need visualization for this?
-# 2) if yes, what forms to highlight what knowledg
-#    * Ven Diaggram to highlight different sets of genes
-#    * Scatter plot for two different Resolution trade-off
-#    * Schematic
+spe_visium$cluster_HVG_label <- spe_overlap_visium$cluster_HVG_label <- cluster_HVG_label
+spe_visium$cluster_400_label <- spe_overlap_visium$cluster_400_label <- cluster_400_label
+spe_merf$merf_label <- spe_overlap_merf$merf_label <- merf_label
 
-### Venn Diagram ----
-library(VennDiagram)
+# plotReducedDim(spe_visium,
+#   ncomponents = 4,
+#   dimred = "PCA", colour_by = "cluster_HVG_label"
+# )
+# plotReducedDim(spe_visium,
+#   ncomponents = 4,
+#   dimred = "PCA", colour_by = "cluster_400_label"
+# )
 
-dev.off()
-venn.diagram(
-  x = list(
-    rowData(spe_visium)$symbol,
-    rownames(sub_merf)
-  ),
-  filename = NULL,
-  category.names = c("Visium", "Merfish"),
-  output = FALSE
-) |> grid.draw()
+## Spatial Plot ----
+# make_escheR(spe_visium) |>
+#   add_fill(var = "cluster_HVG_label")
 
-# TODO: aethestic adjustment
-# https://r-graph-gallery.com/14-venn-diagramm
+# make_escheR(spe_visium) |>
+#   add_fill(var = "cluster_400_label")
 
+# make_escheR(spe_overlap_merf) |>
+#   add_fill(var = "merf_label", point_size = 0.5)
 
-### Scatter plot ----
-p_df <- data.frame(
-  tech = c("Visium", "Merfish"),
-  gene = c(nrow(spe_visium), nrow(sub_merf)),
-  sample_size = c(ncol(spe_visium), ncol(sub_merf))
+# Save Visium and Merfish RDS ----
+saveRDS(
+  spe_merf,
+  here("processed_data", "spe_merf.rds")
 )
 
-plot(p_df$gene, p_df$sample_size)
-# TODO:
-# 1) log scaling for x and y
-# 2) add label to the data points
+saveRDS(
+  spe_visium,
+  here("processed_data", "spe_visium.rds")
+)
 
-# length(rownames(sub_merf))
+saveRDS(
+  spe_overlap_merf,
+  here("processed_data", "spe_overlap_merf.rds")
+)
 
-## Library size ----
-merf_lib_size <- counts(sub_merf) |> colSums()
-visium_lib_size <- counts(spe_visium) |> colSums()
+saveRDS(
+  spe_overlap_visium,
+  here("processed_data", "spe_overlap_visium.rds")
+)
 
-library(tidyverse)
+# Create joint SPE with Visium and Merfish ----
+colData(spe_overlap_visium) <- DataFrame(sample_id = spe_overlap_visium$sample_id)
+colData(spe_overlap_merf) <- DataFrame(sample_id = spe_overlap_merf$sample_id)
+spe_joint <- cbind(spe_overlap_visium, spe_overlap_merf)
 
-rbind(
-  data.frame(
-    lib_size = merf_lib_size
-  ) |> mutate(tech = "merfish"),
-  data.frame(
-    lib_size = visium_lib_size
-  ) |> mutate(tech = "visium")
-) |>
-ggplot() +
-  stat_ecdf(aes(x = lib_size, color = tech), geom = "step") +
-  scale_x_log10() +
-  theme_minimal()
+## Preprocessing ----
+spe_joint <- logNormCounts(spe_joint, size.factors = NULL)
+set.seed(20241129)
+spe_joint <- fixedPCA(spe_joint, subset.row = NULL)
 
-# TODO: 
-# 1) make the x_axis more readable.
-
-## gene ----
-gene_symbol <- "Baiap2"
-em_id <- which(rowData(spe_visium)$symbol == gene_symbol)
-lc_merf <- logcounts(sub_merf)[gene_symbol, ]
-lc_visium <- logcounts(spe_visium)[em_id, ]
-
-rbind(
-  data.frame(
-    lc = lc_merf
-  ) |> mutate(tech = "merfish"),
-  data.frame(
-    lc = lc_visium
-  ) |> mutate(tech = "visium")
-) |>
-ggplot() +
-  stat_ecdf(aes(x = lc, color = tech), geom = "step") +
-  # scale_x_log10() +
-  theme_minimal() +
-  labs(title = gene_symbol)
-
-
-## Dimension reduction
+## Save Joint SPE ----
+saveRDS(
+  spe_joint,
+  here("processed_data", "spe_joint.rds")
+)
 
 
 # Session Info ----
