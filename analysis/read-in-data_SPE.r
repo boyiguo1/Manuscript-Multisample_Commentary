@@ -5,6 +5,7 @@ suppressPackageStartupMessages({
   library(here)
   library(scuttle)
   library(scran)
+  library(scater)
   library(tidyverse)
   library(sessioninfo)
 })
@@ -156,6 +157,23 @@ spe_joint <- cbind(spe_overlap_visium, spe_overlap_merf)
 spe_joint <- logNormCounts(spe_joint, size.factors = NULL)
 set.seed(20241129)
 spe_joint <- fixedPCA(spe_joint, subset.row = NULL)
+
+
+## Add relavent columns ----
+spe_joint$cluster_HVG_label <- c(
+  spe_visium$cluster_HVG_label,
+  rep(NA, ncol(spe_merf))
+) |> factor()
+
+spe_joint$cluster_400_label <- c(
+  spe_visium$cluster_400_label,
+  rep(NA, ncol(spe_merf))
+) |> factor()
+
+spe_joint$merf_label <- c(
+  rep(NA, ncol(spe_visium)),
+  spe_merf$merf_label
+) |> factor()
 
 ## Save Joint SPE ----
 saveRDS(
