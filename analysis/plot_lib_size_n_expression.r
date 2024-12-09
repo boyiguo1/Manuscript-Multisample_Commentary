@@ -6,11 +6,27 @@ suppressPackageStartupMessages({
   library(ggridges)
   library(sessioninfo)
   library(escheR)
+  library(scales)
 })
 
 # Load data ----
 # TODO: add this part
 # Roughly needing the four spe datasets
+spe_merf <- readRDS(
+  here("processed_data", "spe_merf.rds")
+)
+
+spe_visium <- readRDS(
+  here("processed_data", "spe_visium.rds")
+)
+
+# spe_overlap_merf <- readRDS(
+#   here("processed_data", "spe_overlap_merf.rds")
+# )
+
+spe_overlap_visium <- readRDS(
+  here("processed_data", "spe_overlap_visium.rds")
+)
 
 
 # Library Size Plots ----
@@ -20,8 +36,8 @@ merf_lib_size <- counts(spe_merf) |>
   colSums()
 visium_lib_size <- counts(spe_visium) |>
   colSums()
-overlap_merf_lib_size <- counts(spe_overlap_merf) |>
-  colSums()
+# overlap_merf_lib_size <- counts(spe_overlap_merf) |>
+#   colSums()
 overlap_visium_lib_size <- counts(spe_overlap_visium) |>
   colSums()
 
@@ -71,14 +87,19 @@ ridge_p <- lib_size_df |>
     limits = c("Visium", "Visium\n(overlap)", "Merfish"),
     expand = expand_scale(mult = c(0.01, .3))
   ) +
-  scale_x_log10(labels = scales::label_number(big.mark = ",")) +
-  theme_minimal() +
+  scale_x_log10(
+    # labels = scales::label_number(big.mark = ","),
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  theme_minimal(base_size = 12) +
   labs(
     x = "Number of Transcripts" # , y = "Technology & Overlap Status"
   ) +
   # coord_cartesian(clip = "off") +
   theme(
-    axis.title.y = element_blank() # ,
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank()
     # text = element_text(size = 12)
   )
 
@@ -110,25 +131,59 @@ ecd_p <- lib_size_df |>
   theme(text = element_text(size = 12))
 
 ## Visium Spatial Plot ----
+pdf(
+  here(
+    "plots/case_visium_n_merf",
+    "spatial_plot_lib_size_visium.pdf"
+  ),
+  width = 4.8,
+  height = 4.2
+)
 spe_visium$lib_size <- visium_lib_size
 make_escheR(spe_visium) |>
-  add_fill("lib_size")
-
+  add_fill("lib_size", point_size = 2.2) +
+  # theme_blank()+
+  theme_void(base_size = 12) +
+  scale_fill_continuous(
+    trans = "log",
+    type = "viridis",
+    name = "",
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels = trans_format("log10", math_format(10^.x))
+  )
+dev.off()
 
 ## Merfish Spatial Plot ----
+pdf(
+  here(
+    "plots/case_visium_n_merf",
+    "spatial_plot_lib_size_merfish.pdf"
+  ),
+  width = 4.8,
+  height = 4.2
+)
 spe_merf$lib_size <- merf_lib_size
 make_escheR(spe_merf) |>
-  add_fill("lib_size", point_size = 0.5)
-
+  add_fill("lib_size", point_size = 0.5) +
+  # theme_blank()+
+  theme_void(base_size = 12) +
+  scale_fill_continuous(
+    trans = "log",
+    type = "viridis",
+    name = "",
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels = trans_format("log10", math_format(10^.x))
+  )
+dev.off()
 
 # Save plot ----
 pdf(
   here(
     "plots/case_visium_n_merf",
     "ridge_lib_size.pdf"
-  ) # ,
-  # width = 1.7,
-  # height = 1.7
+  ),
+  width = 3.3,
+  height = 2
 )
 # png(
 #   here(
@@ -139,7 +194,7 @@ pdf(
 #   # width = 150
 #   # # units = "in"
 # )
-print(p)
+print(ridge_p)
 dev.off()
 
 
